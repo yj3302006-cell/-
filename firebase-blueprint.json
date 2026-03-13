@@ -1,0 +1,37 @@
+{
+  "entities": {
+    "Reward": {
+      "title": "Reward",
+      "description": "A reward (chuper) available for fundraisers based on their collected amount.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the reward" },
+        "minAmount": { "type": "number", "description": "Minimum amount needed to earn this reward" },
+        "description": { "type": "string", "description": "Description of the reward" },
+        "category": { "type": "string", "description": "Optional category" }
+      },
+      "required": ["name", "minAmount"]
+    },
+    "GoalBonus": {
+      "title": "Goal Bonus",
+      "description": "A bonus or discount earned based on the percentage of the goal achieved.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the bonus" },
+        "minPercentage": { "type": "number", "description": "Minimum percentage of goal needed" },
+        "description": { "type": "string", "description": "Description of the bonus" }
+      },
+      "required": ["name", "minPercentage"]
+    }
+  },
+  "firestore": {
+    "/rewards/{rewardId}": {
+      "schema": "Reward",
+      "description": "Collection of available rewards"
+    },
+    "/goalBonuses/{bonusId}": {
+      "schema": "GoalBonus",
+      "description": "Collection of bonuses based on goal percentage"
+    }
+  }
+}

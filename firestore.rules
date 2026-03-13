@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.email == "yj3302006@gmail.com" && 
+             request.auth.token.email_verified == true;
+    }
+
+    // Rewards collection
+    match /rewards/{rewardId} {
+      allow read: if true; // Publicly readable so fundraisers can see rewards
+      allow write: if isAdmin();
+    }
+
+    match /goalBonuses/{bonusId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
