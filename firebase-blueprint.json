@@ -1,37 +1,83 @@
 {
   "entities": {
-    "Reward": {
+    "reward": {
       "title": "Reward",
-      "description": "A reward (chuper) available for fundraisers based on their collected amount.",
+      "description": "An absolute reward based on donations collected.",
       "type": "object",
       "properties": {
-        "name": { "type": "string", "description": "Name of the reward" },
-        "minAmount": { "type": "number", "description": "Minimum amount needed to earn this reward" },
-        "description": { "type": "string", "description": "Description of the reward" },
-        "category": { "type": "string", "description": "Optional category" }
+        "name": { "type": "string" },
+        "minAmount": { "type": "number" },
+        "price": { "type": "number" },
+        "code": { "type": "string" },
+        "description": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "minAmount"]
+      "required": ["name", "minAmount", "price"]
     },
-    "GoalBonus": {
+    "goalBonus": {
       "title": "Goal Bonus",
-      "description": "A bonus or discount earned based on the percentage of the goal achieved.",
+      "description": "A percentage-based bonus reward.",
       "type": "object",
       "properties": {
-        "name": { "type": "string", "description": "Name of the bonus" },
-        "minPercentage": { "type": "number", "description": "Minimum percentage of goal needed" },
-        "description": { "type": "string", "description": "Description of the bonus" }
+        "name": { "type": "string" },
+        "minPercentage": { "type": "number" },
+        "minGoal": { "type": "number" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "minPercentage"]
+    },
+    "claim": {
+      "title": "Reward Claim",
+      "description": "A record of a fundraiser claiming a reward.",
+      "type": "object",
+      "properties": {
+        "fundraiserId": { "type": "string" },
+        "fundraiserName": { "type": "string" },
+        "rewardId": { "type": "string" },
+        "rewardName": { "type": "string" },
+        "type": { "type": "string", "enum": ["reward", "bonus"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "isPaid": { "type": "boolean" },
+        "paidInCash": { "type": "boolean" },
+        "amountToPay": { "type": "number" },
+        "uid": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fundraiserId", "rewardId", "uid"]
+    },
+    "user": {
+      "title": "User Profile",
+      "description": "User account information and roles.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "uid": { "type": "string" }
+      },
+      "required": ["email", "role", "uid"]
+    },
+    "fundraiser": {
+      "title": "Fundraiser Group",
+      "description": "Cached data about a fundraiser group.",
+      "type": "object",
+      "properties": {
+        "ID": { "type": "string" },
+        "GroupName": { "type": "string" },
+        "TotalAmount": { "type": "number" },
+        "Goal": { "type": "number" },
+        "Percentage": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ID", "GroupName"]
     }
   },
   "firestore": {
-    "/rewards/{rewardId}": {
-      "schema": "Reward",
-      "description": "Collection of available rewards"
-    },
-    "/goalBonuses/{bonusId}": {
-      "schema": "GoalBonus",
-      "description": "Collection of bonuses based on goal percentage"
-    }
+    "/rewards/{rewardId}": { "schema": "reward", "description": "Manage absolute rewards" },
+    "/goalBonuses/{bonusId}": { "schema": "goalBonus", "description": "Manage percentage bonuses" },
+    "/claims/{claimId}": { "schema": "claim", "description": "Fundraiser reward claims" },
+    "/users/{userId}": { "schema": "user", "description": "User profiles and roles" },
+    "/fundraisers/{fundraiserId}": { "schema": "fundraiser", "description": "Fundraiser group cache" },
+    "/settings/global": { "schema": "object", "description": "Global application settings" }
   }
 }
