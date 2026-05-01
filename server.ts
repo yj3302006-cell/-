@@ -367,6 +367,64 @@ async function startServer() {
     }
   });
 
+  // Database Maintenance: Cleanup Duplicates
+  app.post("/api/admin/db-maintenance", async (req, res) => {
+    const { action, requester } = req.body;
+
+    if (!requester || !isAdmin(requester)) {
+      return res.status(403).json({ error: "פעולה זו שמורה למנהלים בלבד" });
+    }
+
+    try {
+      if (action === "cleanup_duplicates") {
+        const collections = ["rewards", "fundraisers", "goalBonuses"];
+        let totalRemoved = 0;
+
+        for (const col of collections) {
+          const rows = db.prepare(`SELECT id, data FROM ${col}`).all() as { id: string, data: string }[];
+          const seen = new Set();
+          const toDelete: string[] = [];
+
+          rows.forEach(row => {
+            const item = JSON.parse(row.data);
+            // Create a unique key for identifying duplicates
+            let key;
+            if (col === "rewards") {
+              key = `${item.name?.trim()}_${item.minAmount}_${item.price}`.toLowerCase();
+            } else if (col === "fundraisers") {
+              key = (item.ID || item.GroupName)?.toString().trim().toLowerCase();
+            } else {
+              key = (item.name || item.id || item.ID)?.toString().trim().toLowerCase();
+            }
+
+            if (seen.has(key)) {
+              toDelete.push(row.id);
+            } else {
+              seen.add(key);
+            }
+          });
+
+          if (toDelete.length > 0) {
+            const deleteStmt = db.prepare(`DELETE FROM ${col} WHERE id = ?`);
+            const transaction = db.transaction((ids) => {
+              for (const id of ids) {
+                deleteStmt.run(id);
+              }
+            });
+            transaction(toDelete);
+            totalRemoved += toDelete.length;
+          }
+        }
+        return res.json({ success: true, removed: totalRemoved });
+      }
+
+      res.status(400).json({ error: "Invalid action" });
+    } catch (error: any) {
+      console.error(`[DB Maintenance] Error:`, error.message);
+      res.status(500).json({ error: `כשל בתחזוקת מערכת: ${error.message}` });
+    }
+  });
+
   // GitHub Import Endpoint
   app.post("/api/admin/import-github", async (req, res) => {
     const { url, collection, requester } = req.body;

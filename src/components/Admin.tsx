@@ -15,12 +15,12 @@ export default function Admin() {
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [rewards, setRewards] = useState<any[]>([]);
-  const [bonuses, setBonuses] = useState<any[]>([]);
-  const [claims, setClaims] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [campaignData, setCampaignData] = useState<any>(null);
-  const [fundraisers, setFundraisers] = useState<any[]>([]);
+  const [rewards, setRewards] = useState<RewardData[]>([]);
+  const [bonuses, setBonuses] = useState<BonusData[]>([]);
+  const [claims, setClaims] = useState<ClaimData[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierData[]>([]);
+  const [campaignData, setCampaignData] = useState<CampaignData | null>(null);
+  const [fundraisers, setFundraisers] = useState<GroupData[]>([]);
   const [activeTab, setActiveTab] = useState<"fundraisers" | "claims" | "rules" | "settings" | "admins" | "suppliers" | "github">("fundraisers");
   const isFetching = useRef(false);
   const [showDebug, setShowDebug] = useState(false);
@@ -2176,6 +2176,35 @@ export default function Admin() {
                       {savingSettings ? <Loader2 className="w-5 h-5 animate-spin" /> : <Settings className="w-5 h-5" />}
                       שמור הגדרות
                     </button>
+
+                    <div className="pt-8 mt-8 border-t border-[#141414]/5">
+                      <h3 className="text-sm font-bold mb-4 text-[#5A5A40]">תחזוקת מערכת</h3>
+                      <button 
+                        onClick={async () => {
+                          if (!window.confirm("האם אתה בטוח שברצונך למחוק כפילויות מהמערכת? פעולה זו תסרוק את כל הצ'ופרים והמתרימים ותמחק פריטים זהים.")) return;
+                          try {
+                            const res = await fetch("/api/admin/db-maintenance", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ action: "cleanup_duplicates", requester: user?.username || ADMIN_NAME })
+                            });
+                            const result = await res.json();
+                            if (result.success) {
+                              setToast({ message: `בוצע ניקוי! הוסרו ${result.removed} כפילויות.`, type: "success" });
+                              fetchData();
+                            } else {
+                              setToast({ message: result.error || "נכשל", type: "error" });
+                            }
+                          } catch (e) {
+                            setToast({ message: "שגיאה בתקשורת", type: "error" });
+                          }
+                        }}
+                        className="w-full bg-white text-[#5A5A40] border border-[#5A5A40]/30 py-3 rounded-xl font-bold hover:bg-[#F5F5F0] transition-all flex items-center justify-center gap-2"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        ניקוי כפילויות (ניפוי דאטה)
+                      </button>
+                    </div>
 
                     {user?.role === 'super_admin' && (
                       <div className="pt-8 border-t border-[#141414]/5">

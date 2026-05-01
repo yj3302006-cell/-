@@ -5,6 +5,7 @@ export interface CampaignData {
   GoalAmount?: number;
   Percentage?: number;
   Goal?: number;
+  groups?: GroupData[];
 }
 
 export interface GroupData {
@@ -19,7 +20,7 @@ export interface GroupData {
 export interface RewardData {
   id: string;
   name: string;
-  description: string;
+  description?: string;
   minAmount: number;
   price: number;
   code?: string;
@@ -31,7 +32,7 @@ export interface RewardData {
 export interface BonusData {
   id: string;
   name: string;
-  description: string;
+  description?: string;
   minPercentage: number;
   minGoal?: number;
   discountValue?: number;
