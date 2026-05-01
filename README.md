@@ -10,4 +10,6 @@ Time: 2026-05-01T08:31:00Z
 Status: Final verification of deployment settings. Triggering build at 2026-05-01T10:17:00Z.
 Manual fix: Ensuring vite.config base is set and index.html uses relative paths.
 Final check: GitHub Actions is configured to deploy the 'dist' folder.
-Deployment sync: 1.0.8
+Deployment sync: 1.0.9
+Triggered fresh build and deployment to verify root paths and dist serving.
+Time: 2026-05-01T10:21:00Z
