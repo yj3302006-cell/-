@@ -9,6 +9,7 @@
         "minAmount": { "type": "number" },
         "price": { "type": "number" },
         "code": { "type": "string" },
+        "inDisplay": { "type": "boolean", "description": "If true, item exists in display and should not be ordered from supplier" },
         "description": { "type": "string" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

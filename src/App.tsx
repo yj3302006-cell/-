@@ -1,64 +1,26 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
-import { Search, TrendingUp, Users, Target, Loader2, AlertCircle, RefreshCw, Gift, ShieldCheck, User as UserIcon, LogIn, LogOut, Check, X, Sparkles, Box } from "lucide-react";
+import { Search, TrendingUp, Users, Target, Loader2, AlertCircle, RefreshCw, Gift, Settings, User as UserIcon, LogIn, LogOut, Check, X, Sparkles, Box } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Fuse from "fuse.js";
 import Admin from "./components/Admin";
 import { Login } from "./components/Login";
-import ErrorBoundary from "./components/ErrorBoundary";
-
-interface CampaignData {
-  CampaignName?: string;
-  TotalAmount?: number;
-  GoalAmount?: number;
-  Percentage?: number;
-}
-
-interface GroupData {
-  ID: string;
-  GroupName: string;
-  TotalAmount: number;
-  Goal: number;
-  Percentage?: number;
-}
-
-interface RewardData {
-  id: string;
-  name: string;
-  description: string;
-  minAmount: number;
-  price: number;
-  code?: string;
-  image?: string;
-}
-
-interface BonusData {
-  id: string;
-  name: string;
-  description: string;
-  minPercentage: number;
-  minGoal?: number;
-}
-
-interface CartItem {
-  reward: RewardData | BonusData;
-  type: 'reward' | 'bonus';
-  paidInCash: boolean;
-  amountToPay: number;
-  isPaid?: boolean;
-}
+import ErrorBoundary from "./ErrorBoundary";
+import { CampaignData, GroupData, RewardData, BonusData, CartItem } from "./types";
 
 const App: React.FC = () => {
   const [mosad, setMosad] = useState("7011088");
   const [campaign, setCampaign] = useState<CampaignData | null>(null);
   const [manualGoal, setManualGoal] = useState<number | null>(null);
+  const [cashPayPercentage, setCashPayPercentage] = useState<number>(10);
+  const [cashCalculationMode, setCashCalculationMode] = useState<'percentage' | 'absolute'>('absolute');
   const [groups, setGroups] = useState<GroupData[]>([]);
   const [manualGroups, setManualGroups] = useState<GroupData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchFundraiser, setSearchFundraiser] = useState("");
   const [searchReward, setSearchReward] = useState("");
-  const [selectedGroupName, setSelectedGroupName] = useState<string | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [rewards, setRewards] = useState<RewardData[]>([]);
   const [bonuses, setBonuses] = useState<BonusData[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -74,6 +36,7 @@ const App: React.FC = () => {
     buttons?: { text: string; action: (replace: boolean) => void; variant?: 'primary' | 'secondary' | 'danger' }[];
   } | null>(null);
   const [fundraiserClaims, setFundraiserClaims] = useState<any[]>([]);
+  const [shouldClearOldClaims, setShouldClearOldClaims] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   const lastFetchedMosad = useRef<string | null>(null);
@@ -105,6 +68,12 @@ const App: React.FC = () => {
           if (global.manualGoal !== undefined) {
             setManualGoal(global.manualGoal);
           }
+          if (global.cashPayPercentage !== undefined) {
+            setCashPayPercentage(global.cashPayPercentage);
+          }
+          if (global.cashCalculationMode !== undefined) {
+            setCashCalculationMode(global.cashCalculationMode);
+          }
         } else {
           fetchData(mosad);
         }
@@ -128,8 +97,8 @@ const App: React.FC = () => {
   const displayGroups = useMemo(() => {
     const merged = [...groups];
     manualGroups.forEach(mg => {
-      // Check multiple ID fields for robust matching
-      if (!merged.find(g => (g.ID || (g as any).GroupId || (g as any).Code) === mg.ID)) {
+      const mgId = String(mg.ID).trim();
+      if (!merged.find(g => String(g.ID || (g as any).GroupId || (g as any).Code).trim() === mgId)) {
         merged.push(mg);
       }
     });
@@ -148,31 +117,36 @@ const App: React.FC = () => {
     return fuse.search(searchFundraiser).map(result => result.item);
   }, [fuse, searchFundraiser, displayGroups]);
 
-  const selectedGroup = displayGroups.find(g => g.GroupName === selectedGroupName) || (filteredGroups.length === 1 ? filteredGroups[0] : null);
+  const selectedGroup = useMemo(() => {
+    if (!selectedGroupId) return null;
+    return displayGroups.find(g => String(g.ID) === String(selectedGroupId));
+  }, [displayGroups, selectedGroupId]);
+
+  const fetchClaimsForGroup = async (groupId: string) => {
+    try {
+      const res = await fetch("/api/db/claims");
+      const data = await res.json();
+      if (data && Array.isArray(data)) {
+        const filtered = data.filter((c: any) => String(c.fundraiserId) === String(groupId));
+        setFundraiserClaims(filtered);
+      }
+    } catch (e) {
+      console.error("Fetch claims error:", e);
+    }
+  };
 
   useEffect(() => {
-    if (selectedGroup) {
-      const interval = setInterval(async () => {
-        try {
-          const res = await fetch("/api/db/claims");
-          const data = await res.json();
-          if (data && Array.isArray(data)) {
-            const filtered = data.filter((c: any) => c.fundraiserId === selectedGroup.ID);
-            setFundraiserClaims(filtered);
-          }
-        } catch (e) {
-          console.error("Polling claims error:", e);
-        }
-      }, 5000); // Poll every 5s for claims
-
+    if (selectedGroupId) {
+      fetchClaimsForGroup(selectedGroupId);
+      const interval = setInterval(() => fetchClaimsForGroup(selectedGroupId), 5000);
       return () => clearInterval(interval);
     } else {
       setFundraiserClaims([]);
     }
-  }, [selectedGroup?.ID]);
+  }, [selectedGroupId]);
 
   const totalCollected = campaign?.TotalAmount || displayGroups.reduce((sum, g) => sum + (g.TotalAmount || 0), 0);
-  const totalGoal = manualGoal || campaign?.Goal || displayGroups.reduce((sum, g) => sum + (g.Goal || 0), 0);
+  const totalGoal = manualGoal || campaign?.GoalAmount || displayGroups.reduce((sum, g) => sum + (g.Goal || 0), 0);
   const overallPercentage = totalGoal > 0 ? (totalCollected / totalGoal) * 100 : 0;
 
   const previousClaimsBudget = useMemo(() => {
@@ -193,13 +167,25 @@ const App: React.FC = () => {
     : [];
 
   const shownRewards = useMemo(() => {
-    let list = showAllRewards ? rewards : eligibleRewards;
     if (searchReward.trim()) {
-      const fr = new Fuse(list, { keys: ["name", "code", "description"], threshold: 0.35 });
+      const fr = new Fuse(rewards, { keys: ["name", "code", "description"], threshold: 0.35 });
       return fr.search(searchReward).map(r => r.item);
     }
-    return list.sort((a, b) => a.minAmount - b.minAmount);
-  }, [showAllRewards, rewards, eligibleRewards, searchReward]);
+
+    let list;
+    if (showAllRewards) {
+      // Premium mode: show items that require adding cash (> remaining budget)
+      list = rewards.filter(r => remainingBudget < r.minAmount);
+      // Sort ascending so the closest premium item is first
+      list.sort((a, b) => a.minAmount - b.minAmount);
+    } else {
+      // Affordable mode: show only what we can afford with current budget
+      list = rewards.filter(r => remainingBudget >= r.minAmount);
+      // Sort descending so the closest (highest value) item is first
+      list.sort((a, b) => b.minAmount - a.minAmount);
+    }
+    return list;
+  }, [showAllRewards, rewards, remainingBudget, searchReward]);
 
   const eligibleBonuses = selectedGroup
     ? bonuses.filter(b => 
@@ -208,6 +194,15 @@ const App: React.FC = () => {
       )
     : [];
 
+  const totalDiscount = useMemo(() => {
+    return eligibleBonuses.reduce((sum, b) => {
+      // Try to parse discount from description if discountValue is missing
+      if (b.discountValue) return sum + b.discountValue;
+      const match = b.description.match(/(\d+)/);
+      return sum + (match ? parseInt(match[1]) : 0);
+    }, 0);
+  }, [eligibleBonuses]);
+
   const nextReward = selectedGroup 
     ? rewards.find(r => remainingBudget < r.minAmount)
     : null;
@@ -215,85 +210,96 @@ const App: React.FC = () => {
   const handleAddToCart = (reward: RewardData | BonusData, type: 'reward' | 'bonus', paidInCash: boolean = false, forceAdd: boolean = false) => {
     if (!selectedGroup) return;
     
-    const existingIndex = cart.findIndex(item => item.reward.id === reward.id);
-    
     const calculateIsPaid = (isPaidRequested: boolean, isCash: boolean) => {
-      // If it's free (not paid in cash), it's automatically "paid"
       if (!isCash) return true;
-      // Otherwise, depend on the checkbox
       return isPaidRequested;
     };
 
-    if (existingIndex !== -1 && !forceAdd) {
+    let amountToPay = 0;
+    if (paidInCash && type === 'reward') {
+      const r = reward as RewardData;
+      if (cashCalculationMode === 'percentage') {
+        const missingAmount = Math.max(0, r.minAmount - remainingBudget);
+        amountToPay = Math.round(missingAmount * (cashPayPercentage / 100));
+      } else {
+        const milestonesReached = rewards
+          .filter(rm => rm.minAmount <= remainingBudget)
+          .sort((a, b) => b.minAmount - a.minAmount);
+        const latestMilestonePrice = milestonesReached.length > 0 ? milestonesReached[0].price : 0;
+        amountToPay = Math.max(0, r.price - latestMilestonePrice);
+      }
+    }
+
+    const hasExistingDatabaseClaims = fundraiserClaims && fundraiserClaims.length > 0;
+    const hasCartItems = cart && cart.length > 0;
+
+    if ((hasCartItems || hasExistingDatabaseClaims) && !forceAdd) {
+      const modalMessage = hasExistingDatabaseClaims 
+        ? `נמצאו מימושים קודמים עבור "${selectedGroup.GroupName}". האם ברצונך להחליף את כולם בבחירה החדשה (לדרוס) או להוסיף את הצ'ופר הזה כמימוש נוסף?`
+        : `כבר בחרת צ'ופר אחד בסל הנוכחי. האם ברצונך להחליף את הבחירה הקודמת (לדרוס) או להוסיף את הצ'ופר הזה כמימוש נוסף?`;
+
       setConfirmModal({
-        title: "צ'ופר כבר קיים בסל",
-        message: `צ'ופר זה ("${reward.name}") כבר נמצא בסל הקניות שלך. האם ברצונך להחליף את הקיים (לדרוס) או להוסיף אחד נוסף כבקשה חדשה?`,
-        onConfirm: () => {}, // Not used as we define custom buttons
+        title: hasExistingDatabaseClaims ? "כבר בוצע מימוש בעבר" : "כבר בחרת צ'ופר",
+        message: modalMessage,
         buttons: [
           { 
-            text: "לדרוס (החלף)", 
+            text: "להחליף (לדרוס)", 
             action: () => {
-              setCart(prev => {
-                const newCart = [...prev];
-                let amountToPay = 0;
-                if (paidInCash && type === 'reward') {
-                  const r = reward as RewardData;
-                  // Calculate budget without the item being replaced to avoid double-counting
-                  const otherItemsBudget = prev.filter((_, idx) => idx !== existingIndex)
-                    .reduce((sum, item) => item.type === 'reward' ? sum + (item.reward as RewardData).minAmount : sum, 0);
-                  const currentRemainingBudget = selectedGroup!.TotalAmount - otherItemsBudget;
-                  const diff = Math.max(0, r.minAmount - currentRemainingBudget);
-                  amountToPay = Math.round((diff / r.minAmount) * r.price);
-                }
-                newCart[existingIndex] = { reward, type, paidInCash, amountToPay, isPaid: calculateIsPaid(isPaidChecked, paidInCash) };
-                return newCart;
-              });
-              setConfirmModal(null);
-            },
-            variant: 'secondary'
-          },
-          { 
-            text: "הוסף לסל (חדש)", 
-            action: () => {
-              let amountToPay = 0;
-              if (paidInCash && type === 'reward') {
-                const r = reward as RewardData;
-                const diff = Math.max(0, r.minAmount - remainingBudget);
-                amountToPay = Math.round((diff / r.minAmount) * r.price);
-              }
-              setCart(prev => [...prev, { reward, type, paidInCash, amountToPay, isPaid: calculateIsPaid(isPaidChecked, paidInCash) }]);
+              if (hasExistingDatabaseClaims) setShouldClearOldClaims(true);
+              setCart([{ reward, type, paidInCash, amountToPay, isPaid: calculateIsPaid(isPaidChecked, paidInCash) }]);
               setConfirmModal(null);
             },
             variant: 'primary'
+          },
+          { 
+            text: "להוסיף כחדש", 
+            action: () => {
+              setCart(prev => [...prev, { reward, type, paidInCash, amountToPay, isPaid: calculateIsPaid(isPaidChecked, paidInCash) }]);
+              setConfirmModal(null);
+            },
+            variant: 'secondary'
           },
           {
             text: "ביטול",
             action: () => setConfirmModal(null),
             variant: 'secondary'
           }
-        ]
+        ],
+        onConfirm: () => {} 
       });
       return;
-    }
-
-    let amountToPay = 0;
-    if (paidInCash && type === 'reward') {
-      const r = reward as RewardData;
-      const diff = Math.max(0, r.minAmount - remainingBudget);
-      amountToPay = Math.round((diff / r.minAmount) * r.price);
     }
 
     setCart(prev => [...prev, { reward, type, paidInCash, amountToPay, isPaid: calculateIsPaid(isPaidChecked, paidInCash) }]);
   };
 
   const handleRemoveFromCart = (index: number) => {
-    setCart(prev => prev.filter((_, i) => i !== index));
+    setCart(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) {
+        setShouldClearOldClaims(false);
+      }
+      return next;
+    });
   };
 
   const handleCheckout = async () => {
     if (!selectedGroup || cart.length === 0) return;
     setClaiming(true);
     try {
+      const now = new Date().toISOString();
+      
+      // If we need to clear old claims, do it first
+      if (shouldClearOldClaims && fundraiserClaims.length > 0) {
+        console.log(`[App] Clearing ${fundraiserClaims.length} existing claims for fundraiser ${selectedGroup.ID}`);
+        // targeted delete on server would be better, but loop is okay for small counts
+        await Promise.all(fundraiserClaims.map(oldClaim => 
+          fetch(`/api/db/claims/${oldClaim.id}`, { method: "DELETE" }).catch(e => console.error(e))
+        ));
+        setShouldClearOldClaims(false);
+        setFundraiserClaims([]);
+      }
+
       for (const item of cart) {
         await fetch("/api/db/claims", {
           method: "POST",
@@ -308,14 +314,17 @@ const App: React.FC = () => {
             status: 'pending',
             paidInCash: item.paidInCash,
             amountToPay: item.amountToPay,
-            isPaid: item.isPaid || false,
+            isPaid: item.isPaid,
             uid: user?.uid || 'guest',
-            userEmail: user?.email || 'guest'
+            userEmail: user?.email || 'guest',
+            updatedBy: user?.displayName || user?.username || 'אורח',
+            updatedAt: now
           })
         });
       }
       setToast({ message: "כל הבקשות נשלחו בהצלחה!", type: "success" });
       setCart([]);
+      if (selectedGroupId) fetchClaimsForGroup(selectedGroupId);
     } catch (err) {
       console.error("Checkout error:", err);
       setToast({ message: "שגיאה בשליחת הבקשות", type: "error" });
@@ -360,7 +369,7 @@ const App: React.FC = () => {
           const totalAmount = Number(g.TotalAmount !== undefined ? g.TotalAmount : (g.Cumule !== undefined ? g.Cumule : (g.Amount || g.Sum || g.Total || g.MatrimTotal || 0)));
           const goal = Number(g.Goal !== undefined ? g.Goal : (g.Target || g.GoalAmount || g.MainGoal || g.MatrimGoal || 0));
           const groupName = String(g.GroupName || g.Name || g.Title || g.MatrimName || g.GroupTitle || "ללא שם").trim();
-          const groupId = String(g.ID || g.GroupId || g.Code || g.GroupCode || g.MatrimId || "").trim();
+          const groupId = String(g.ID || g.GroupId || g.Code || g.GroupCode || g.MatrimId || `auto_${groupName || Math.random().toString(36).substr(2, 5)}`).trim();
           const percentage = g.Percentage !== undefined ? Number(g.Percentage) : (goal > 0 ? (totalAmount / goal) * 100 : 0);
           
           return {
@@ -451,16 +460,15 @@ const App: React.FC = () => {
   }
 
   return (
-    <ErrorBoundary>
-      <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans selection:bg-[#6366F1] selection:text-white" dir="rtl">
+    <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans selection:bg-[#6366F1] selection:text-white" dir="rtl">
         <header className="bg-white border-b border-[#141414]/10 sticky top-0 z-10">
           <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="flex items-center gap-3">
               <Link to="/" className="bg-gradient-to-br from-[#6366F1] to-[#4F46E5] p-2 rounded-xl shadow-lg shadow-indigo-500/20">
-                <Box className="text-white w-6 h-6" />
+                <Gift className="text-white w-6 h-6" />
               </Link>
               <div>
-                <h1 className="text-xl font-black tracking-tight text-[#2D3E50]">Campeee</h1>
+                <h1 className="text-xl font-black tracking-tight text-[#2D3E50]">צ'ופרקל</h1>
                 <p className="text-xs text-[#2D3E50]/60 font-bold uppercase tracking-wider">
                   {campaign?.CampaignName || "מעקב קמפיין"}
                 </p>
@@ -480,7 +488,7 @@ const App: React.FC = () => {
                 </div>
               )}
               
-              <div className="flex flex-col gap-2 w-full md:w-auto">
+              <div className="flex gap-2 w-full md:w-auto">
                 <div className="flex gap-2 w-full md:w-auto">
                   <button 
                     onClick={() => fetchData(mosad)}
@@ -508,17 +516,6 @@ const App: React.FC = () => {
                     חפש
                   </button>
                 </div>
-                <div className="relative w-full md:w-64">
-                  <Gift className="absolute right-3 top-1/2 -translate-y-1/2 text-[#141414]/40 w-4 h-4" />
-                  <input
-                    type="text"
-                    placeholder={selectedGroup ? `חיפוש צ'ופר (שם או קוד) עבור ${selectedGroup.GroupName}...` : "בחר מתרים לבדיקת זכאות..."}
-                    className="w-full bg-[#F5F5F0] border-none rounded-full py-2 pr-10 pl-4 text-sm focus:ring-2 focus:ring-[#5A5A40]/20 transition-all outline-none"
-                    value={searchReward}
-                    onChange={(e) => setSearchReward(e.target.value)}
-                    disabled={!selectedGroup}
-                  />
-                </div>
               </div>
               <div className="flex gap-2">
                 <button 
@@ -528,9 +525,20 @@ const App: React.FC = () => {
                 >
                   <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
                 </button>
-                <Link to="/admin" className="p-2 hover:bg-[#F5F5F0] rounded-full transition-colors" title="ניהול">
-                  <ShieldCheck className="w-5 h-5 text-[#141414]/40" />
-                </Link>
+                {(user?.role === 'admin' || user?.role === 'super_admin') && (
+                  <Link 
+                    to="/admin" 
+                    className="p-2.5 bg-[#5A5A40] text-white rounded-full transition-all border-2 border-white/20 shadow-lg group/admin relative flex items-center justify-center overflow-hidden hover:scale-110 active:scale-95" 
+                    title="ניהול"
+                  >
+                    <motion.div
+                      animate={{ opacity: [0.1, 0.3, 0.1] }}
+                      transition={{ duration: 2, repeat: Infinity }}
+                      className="absolute inset-0 bg-white"
+                    />
+                    <Settings className="w-6 h-6 transition-transform duration-700 group-hover/admin:rotate-180 relative z-10" strokeWidth={2.5} />
+                  </Link>
+                )}
               </div>
             </div>
           </div>
@@ -611,14 +619,15 @@ const App: React.FC = () => {
                     {filteredGroups.map((group, idx) => {
                       return (
                         <motion.div 
-                          key={group.GroupName} 
+                          key={group.ID || idx} 
                           layout 
                           initial={{ opacity: 0, scale: 0.95 }} 
                           animate={{ opacity: 1, scale: 1 }} 
                           transition={{ duration: 0.2 }} 
                           onClick={() => {
-                            setSelectedGroupName(group.GroupName);
+                            setSelectedGroupId(String(group.ID));
                             setCart([]);
+                            setShouldClearOldClaims(false);
                           }}
                           className="bg-white p-5 rounded-2xl border cursor-pointer transition-all group border-[#141414]/5 hover:border-[#5A5A40]/20 hover:shadow-md"
                         >
@@ -641,7 +650,7 @@ const App: React.FC = () => {
                               <motion.div 
                                 initial={{ width: 0 }} 
                                 animate={{ width: `${Math.min(group.Percentage || 0, 100)}%` }} 
-                                className="h-full bg-[#5A5A40]" 
+                                className={`h-full ${(group.Percentage || 0) >= 100 ? "bg-green-500" : "bg-red-500"}`} 
                               />
                             </div>
                           </div>
@@ -688,7 +697,7 @@ const App: React.FC = () => {
                      </div>
                   </div>
                   <button 
-                    onClick={() => setSelectedGroupName(null)}
+                    onClick={() => setSelectedGroupId(null)}
                     className="p-3 bg-[#F5F5F0] hover:bg-red-50 hover:text-red-500 rounded-full transition-all"
                   >
                     <X className="w-6 h-6" />
@@ -702,7 +711,7 @@ const App: React.FC = () => {
                       <div className="p-4 bg-white rounded-2xl border border-[#141414]/5 shadow-sm">
                         <div className="flex justify-between items-center mb-1">
                            <p className="text-[10px] text-[#141414]/40 font-bold uppercase tracking-widest">נאסף ע"י המתרים</p>
-                           <span className="text-[10px] font-bold text-[#5A5A40]">{selectedGroup.Percentage?.toFixed(1)}%</span>
+                           <span className={`text-[10px] font-bold ${(selectedGroup.Percentage || 0) >= 100 ? "text-green-600" : "text-red-600"}`}>{selectedGroup.Percentage?.toFixed(1)}%</span>
                         </div>
                         <p className="text-xl font-bold">₪{selectedGroup.TotalAmount.toLocaleString()}</p>
                       </div>
@@ -726,9 +735,10 @@ const App: React.FC = () => {
                            <h3 className="text-sm font-bold">סגל צ'ופרים</h3>
                            <button 
                             onClick={() => setShowAllRewards(!showAllRewards)}
-                            className={`text-[9px] font-bold px-2 py-1 rounded-lg transition-all ${showAllRewards ? 'bg-[#5A5A40] text-white' : 'bg-[#F5F5F0] text-[#5A5A40]'}`}
+                            className={`text-[10px] font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-2 ${showAllRewards ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20' : 'bg-[#5A5A40] text-white shadow-lg shadow-[#5A5A40]/20'}`}
                           >
-                            {showAllRewards ? "זכאים" : "כל הסגל"}
+                            <Sparkles className="w-3 h-3" />
+                            {showAllRewards ? "חזור לזמינים" : "צ'ופרים יקרים"}
                           </button>
                         </div>
 
@@ -752,22 +762,25 @@ const App: React.FC = () => {
                              <button onClick={() => setCart([])} className="text-[10px] text-red-500 font-bold hover:underline">נקה</button>
                            </div>
                            <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                              {cart.map((item, i) => (
-                                <div key={i} className="flex justify-between items-center text-[11px] p-2 bg-[#F5F5F0] rounded-lg">
-                                  <span className="truncate flex-1 ml-2">{item.reward.name}</span>
-                                  <div className="text-left shrink-0">
-                                     <span className="font-bold block">{item.paidInCash ? `₪${item.amountToPay}` : 'חינם'}</span>
-                                     {item.paidInCash && <span className={`text-[8px] font-bold ${item.isPaid ? 'text-green-600' : 'text-red-500'}`}>{item.isPaid ? '✓ שולם' : '✘ לא שולם'}</span>}
+                              {cart.map((item, i) => {
+                                const isItemPaid = item.isPaid || (item.paidInCash && isPaidChecked) || !item.paidInCash;
+                                return (
+                                  <div key={i} className="flex justify-between items-center text-[11px] p-2 bg-[#F5F5F0] rounded-lg">
+                                    <span className="truncate flex-1 ml-2">{item.reward.name}</span>
+                                    <div className="text-left shrink-0">
+                                       <span className="font-bold block">{item.paidInCash ? `₪${item.amountToPay}` : 'חינם'}</span>
+                                       {item.paidInCash && <span className={`text-[8px] font-bold ${isItemPaid ? 'text-green-600' : 'text-red-500'}`}>{isItemPaid ? '✓ שולם' : '✘ לא שולם'}</span>}
+                                    </div>
                                   </div>
-                                </div>
-                              ))}
+                                );
+                              })}
                            </div>
                            <button 
                             onClick={handleCheckout}
                             disabled={claiming}
                             className="w-full py-3 bg-[#5A5A40] text-white rounded-xl font-bold hover:bg-[#4A4A30] transition-all disabled:opacity-50 flex items-center justify-center gap-2 text-sm shadow-lg shadow-[#5A5A40]/10"
                           >
-                            {claiming ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                            {claiming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Settings className="w-4 h-4" />}
                             {"אשר ושלח מימוש"}
                           </button>
                         </div>
@@ -777,50 +790,41 @@ const App: React.FC = () => {
 
                   {/* Main Product Grid */}
                   <div className="flex-1 overflow-y-auto p-6 bg-white">
-                    {/* Bonuses Section */}
-                    {eligibleBonuses.length > 0 && !searchReward && (
-                      <div className="mb-12">
-                        <div className="flex items-center gap-3 mb-6">
-                           <Sparkles className="w-5 h-5 text-orange-400" />
-                           <h3 className="font-bold text-lg">בונוסים שנתקבלו ביעד</h3>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                           {eligibleBonuses.map(bonus => {
-                             const alreadyInCart = cart.some(item => item.reward.id === bonus.id);
-                             return (
-                               <div key={bonus.id} className="p-5 bg-orange-50 rounded-2xl border border-orange-100 flex flex-col justify-between">
-                                 <div>
-                                    <div className="flex justify-between items-center mb-2">
-                                       <h4 className="font-bold text-orange-900">{bonus.name}</h4>
-                                       <span className="bg-orange-200 text-orange-800 px-2 py-0.5 rounded-full text-[10px] font-bold">{bonus.minPercentage}%</span>
-                                    </div>
-                                    <p className="text-xs text-orange-800/60 mb-6">{bonus.description}</p>
-                                 </div>
-                                 <button 
-                                  onClick={() => handleAddToCart(bonus, 'bonus')}
-                                  className={`w-full py-3 rounded-xl font-bold transition-all text-xs ${alreadyInCart ? 'bg-orange-500/10 text-orange-600 border border-orange-200' : 'bg-orange-500 text-white shadow-md'}`}
-                                >
-                                  {alreadyInCart ? "הוסף בונוס נוסף" : "ממש בונוס"}
-                                </button>
-                               </div>
-                             )
-                           })}
-                        </div>
-                      </div>
-                    )}
-
                     {/* Rewards Grid */}
-                    <div className="flex items-center gap-3 mb-6">
-                       <Gift className="w-5 h-5 text-blue-500" />
-                       <h3 className="font-bold text-lg">קטלוג צ'ופרים</h3>
+                    <div className="flex justify-between items-center mb-6">
+                      <div className="flex items-center gap-3">
+                         <Gift className="w-5 h-5 text-blue-500" />
+                         <h3 className="font-bold text-lg">קטלוג צ'ופרים</h3>
+                      </div>
+                      {totalDiscount > 0 && (
+                        <div className="flex items-center gap-2 bg-orange-50 text-orange-700 px-3 py-1.5 rounded-full border border-orange-100">
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span className="text-[10px] font-bold">הנחת יעד פעילה: ₪{totalDiscount.toLocaleString()}</span>
+                        </div>
+                      )}
                     </div>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                         {shownRewards.map((reward) => {
-                          const isEligible = selectedGroup.TotalAmount >= reward.minAmount;
+                          const isEligible = remainingBudget >= reward.minAmount;
                           const canPayDiff = !isEligible && (reward.minAmount - remainingBudget) <= (totalGoal * 0.1);
                           const alreadyInCart = cart.some(item => item.reward.id === reward.id);
-                          const missingAmount = Math.max(0, reward.minAmount - selectedGroup.TotalAmount);
+                          const missingAmount = Math.max(0, reward.minAmount - remainingBudget);
+                          
+                          let displayCashPrice = 0;
+                          if (cashCalculationMode === 'percentage') {
+                             displayCashPrice = Math.round(missingAmount * (cashPayPercentage / 100));
+                          } else {
+                             // Absolute mode based on price difference between rewards
+                             const milestonesReached = rewards
+                               .filter(rm => rm.minAmount <= remainingBudget)
+                               .sort((a, b) => b.minAmount - a.minAmount);
+                             const latestMilestonePrice = milestonesReached.length > 0 ? milestonesReached[0].price : 0;
+                             displayCashPrice = Math.max(0, reward.price - latestMilestonePrice);
+                          }
+                          
+                          const discountedPrice = totalDiscount > 0 ? Math.max(0, reward.price - totalDiscount) : reward.price;
+                          const hasDiscount = totalDiscount > 0 && reward.price > 0;
 
                           return (
                             <div 
@@ -835,7 +839,14 @@ const App: React.FC = () => {
                                   </div>
                                   <div className="text-left shrink-0">
                                     <div className="text-[10px] font-bold text-[#5A5A40] bg-[#5A5A40]/5 px-2 py-0.5 rounded-lg mb-1">יעד ₪{reward.minAmount.toLocaleString()}</div>
-                                    <div className="text-[10px] text-[#141414]/40 font-bold">₪{reward.price.toLocaleString()}</div>
+                                    <div className="flex flex-col items-end">
+                                      {hasDiscount && (
+                                        <span className="text-[8px] text-gray-400 line-through">₪{reward.price.toLocaleString()}</span>
+                                      )}
+                                      <div className={`text-[10px] font-bold ${hasDiscount ? 'text-orange-600' : 'text-[#141414]/40'}`}>
+                                        ₪{discountedPrice.toLocaleString()}
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
                                 <p className="text-xs text-[#141414]/60 leading-relaxed line-clamp-3">{reward.description}</p>
@@ -866,7 +877,7 @@ const App: React.FC = () => {
                                       className={`w-full py-3 border rounded-xl font-bold transition-all text-xs overflow-hidden relative ${!canPayDiff ? 'bg-slate-200 border-slate-200 text-slate-400 cursor-not-allowed' : alreadyInCart ? 'bg-[#5A5A40]/5 text-[#5A5A40] border-[#5A5A40]' : 'border-[#5A5A40] text-[#5A5A40] hover:bg-[#5A5A40] hover:text-white shadow-sm'}`}
                                     >
                                       <span className="relative z-10">
-                                        {alreadyInCart ? "הוסף השלמה נוספת" : `השלם במזומן (₪${Math.round((missingAmount / reward.minAmount) * reward.price)})`}
+                                        {alreadyInCart ? "הוסף השלמה נוספת" : `השלם במזומן (₪${displayCashPrice.toLocaleString()})`}
                                       </span>
                                     </button>
                                   </div>
@@ -952,17 +963,18 @@ const App: React.FC = () => {
           )}
         </AnimatePresence>
       </div>
-    </ErrorBoundary>
   );
 };
 
 const AppWrapper: React.FC = () => (
-  <Router>
-    <Routes>
-      <Route path="/" element={<App />} />
-      <Route path="/admin" element={<Admin />} />
-    </Routes>
-  </Router>
+  <ErrorBoundary>
+    <Router>
+      <Routes>
+        <Route path="/" element={<App />} />
+        <Route path="/admin" element={<Admin />} />
+      </Routes>
+    </Router>
+  </ErrorBoundary>
 );
 
 export default AppWrapper;

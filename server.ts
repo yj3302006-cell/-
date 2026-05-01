@@ -46,30 +46,67 @@ async function startServer() {
       data TEXT,
       updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id TEXT PRIMARY KEY,
+      data TEXT,
+      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS users_auth (
-      email TEXT PRIMARY KEY,
+      username TEXT PRIMARY KEY,
       password TEXT,
+      role TEXT DEFAULT 'user',
       updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
+  // Migration: Add role column if it doesn't exist
+  try {
+    db.prepare("ALTER TABLE users_auth ADD COLUMN role TEXT DEFAULT 'user'").run();
+  } catch (e) {
+    // Column already exists or other error
+  }
+
+  // Initialize global settings if they don't exist
+  try {
+    const globalSettingsExists = db.prepare("SELECT id FROM settings WHERE id = 'global'").get();
+    if (!globalSettingsExists) {
+      db.prepare("INSERT INTO settings (id, data) VALUES (?, ?)").run("global", JSON.stringify({
+        mosadId: "7011088",
+        manualGoal: null,
+        cashPayPercentage: 10,
+        cashCalculationMode: 'absolute'
+      }));
+    }
+  } catch (e) {}
+
   // Create default admin user if not exists
   try {
-    const adminEmail = "yj3202006@gmail.com"; // User requested change in previous turn to yj3302006? No, wait.
-    // Let me re-read the request.
-    // Request: "ותשנה את הכניסה ששמת כרגע לכתובת yj3302006@gmail.com"
-    // I already did yj3302006@gmail.com.
-    const adminEmailFull = "yj3302006@gmail.com";
+    const defaultAdmin = "יצחק".normalize('NFC');
     const adminPass = "123456"; 
-    db.prepare("INSERT OR REPLACE INTO users_auth (email, password) VALUES (?, ?)").run(adminEmailFull, adminPass);
+    db.prepare("INSERT OR REPLACE INTO users_auth (username, password, role) VALUES (?, ?, 'super_admin')").run(defaultAdmin, adminPass);
   } catch (e) {
     console.error("Failed to create default user", e);
   }
 
+  // Auth management helper
+  const isSuperAdmin = (username: string) => {
+    const user = db.prepare("SELECT role FROM users_auth WHERE username = ?").get(username) as any;
+    return user && user.role === 'super_admin';
+  };
+
+  const isAdmin = (username: string) => {
+    const user = db.prepare("SELECT role FROM users_auth WHERE username = ?").get(username) as any;
+    return user && (user.role === 'admin' || user.role === 'super_admin');
+  };
+
   // Auth management routes
   app.get("/api/admin/users", (req, res) => {
+    const { requester } = req.query;
+    if (!requester || !isAdmin(requester as string)) {
+      return res.status(403).json({ error: "פעולה זו שמורה למנהלים בלבד" });
+    }
     try {
-      const users = db.prepare("SELECT email, password, updatedAt FROM users_auth").all();
+      const users = db.prepare("SELECT username, password, role, updatedAt FROM users_auth").all();
       res.json(users);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -77,20 +114,72 @@ async function startServer() {
   });
 
   app.post("/api/admin/users", (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+    let { username, password, role, requester } = req.body;
+    if (!requester || !isSuperAdmin(requester)) {
+      return res.status(403).json({ error: "פעולה זו שמורה למנהלים ראשיים בלבד" });
+    }
+    if (!username || !password) return res.status(400).json({ error: "שם וסיסמה חובה" });
+    
+    username = String(username).normalize('NFC').trim();
+    password = String(password).trim();
+
     try {
-      db.prepare("INSERT OR REPLACE INTO users_auth (email, password) VALUES (?, ?)").run(email, password);
+      db.prepare("INSERT OR REPLACE INTO users_auth (username, password, role) VALUES (?, ?, ?)").run(username, password, role || 'user');
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.delete("/api/admin/users/:email", (req, res) => {
-    const { email } = req.params;
+  app.delete("/api/admin/users/:username", (req, res) => {
+    const { username } = req.params;
+    const { requester } = req.query;
+    if (!requester || !isSuperAdmin(requester as string)) {
+      return res.status(403).json({ error: "פעולה זו שמורה למנהלים ראשיים בלבד" });
+    }
     try {
-      db.prepare("DELETE FROM users_auth WHERE email = ?").run(email);
+      db.prepare("DELETE FROM users_auth WHERE username = ?").run(username);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/reset-system", (req, res) => {
+    const { password, username } = req.body;
+    if (!password || !username) return res.status(400).json({ error: "Username and password required" });
+    
+    try {
+      const user = db.prepare("SELECT * FROM users_auth WHERE username = ?").get(username) as any;
+      if (!user || user.password !== password || user.role !== 'super_admin') {
+        return res.status(401).json({ error: "סיסמה שגויה או חוסר הרשאות מתאימות (נדרש מנהל ראשי)" });
+      }
+
+      // Reset data
+      db.prepare("DELETE FROM claims").run();
+      db.prepare("DELETE FROM fundraisers").run();
+      db.prepare("DELETE FROM rewards").run();
+      db.prepare("DELETE FROM goalBonuses").run();
+      
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/change-password", (req, res) => {
+    const { username, oldPassword, newPassword } = req.body;
+    if (!username || !oldPassword || !newPassword) {
+      return res.status(400).json({ error: "כל השדות חובה" });
+    }
+
+    try {
+      const user = db.prepare("SELECT * FROM users_auth WHERE username = ?").get(username) as any;
+      if (!user || user.password !== oldPassword) {
+        return res.status(401).json({ error: "סיסמה ישנה שגויה" });
+      }
+
+      db.prepare("UPDATE users_auth SET password = ? WHERE username = ?").run(newPassword, username);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -121,27 +210,55 @@ async function startServer() {
   });
 
   app.post("/api/auth/login", (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: "אימייל וסיסמה חובה" });
+    let { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: "שם משתמש וסיסמה חובה" });
     }
 
+    // Normalize to NFC for consistent character comparison (crucial for Hebrew)
+    const normalizedUsername = String(username).normalize('NFC').trim();
+    password = String(password).trim();
+    
+    // console.log(`[Server] Login attempt for user: ${normalizedUsername}`);
+
     try {
-      const user = db.prepare("SELECT * FROM users_auth WHERE email = ?").get(email) as any;
-      if (!user || user.password !== password) {
-        return res.status(401).json({ error: "אימייל או סיסמה שגויים" });
+      // Try finding the user
+      let user = db.prepare("SELECT * FROM users_auth WHERE username = ?").get(normalizedUsername) as any;
+      
+      // If not found, try finding with NFD normalization fallback (though NFC is standard)
+      if (!user) {
+        const usernameNFD = normalizedUsername.normalize('NFD');
+        user = db.prepare("SELECT * FROM users_auth WHERE username = ?").get(usernameNFD) as any;
       }
 
+      if (!user) {
+        console.log(`[Server] Login failed: User '${username}' not found`);
+        return res.status(404).json({ 
+          error: "משתמש לא קיים במערכת",
+          details: `המשתמש '${username}' לא נמצא.`
+        });
+      }
+      
+      const storedPass = String(user.password || "").trim();
+      if (storedPass !== password) {
+        console.log(`[Server] Login failed: Incorrect password for user '${username}'`);
+        return res.status(401).json({ error: "סיסמה שגויה" });
+      }
+
+      console.log(`[Server] Login success for user: ${username} (Role: ${user.role})`);
       res.json({ 
         success: true, 
         user: { 
-          email: user.email,
-          uid: user.email, // Use email as UID for now
-          displayName: user.email.split('@')[0]
+          username: user.username,
+          uid: user.username,
+          displayName: user.username,
+          role: user.role
         } 
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      console.error(`[Server] Login error for user '${username}':`, e);
+      res.status(500).json({ error: "שגיאת מערכת פנימית" });
     }
   });
 
@@ -165,10 +282,19 @@ async function startServer() {
     try {
       const stmt = db.prepare(`SELECT * FROM ${collection}`);
       const rows = stmt.all();
-      const data = rows.map((row: any) => ({ 
-        id: row.id, 
-        ...JSON.parse(row.data) 
-      }));
+      const data = rows.map((row: any) => {
+        let jsonData = {};
+        try {
+          jsonData = JSON.parse(row.data);
+        } catch (e) {
+          console.error(`Error parsing data for row ${row.id}:`, e);
+        }
+        return { 
+          id: row.id, 
+          updatedAt: row.updatedAt,
+          ...jsonData
+        };
+      });
       res.json(data);
     } catch (e: any) {
       console.error(`[Server] SQLite GET error (${collection}):`, e);
@@ -238,6 +364,55 @@ async function startServer() {
     } catch (e: any) {
       console.error(`[Server] SQLite POST update error (${collection}):`, e);
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GitHub Import Endpoint
+  app.post("/api/admin/import-github", async (req, res) => {
+    const { url, collection, requester } = req.body;
+    
+    if (!requester || !isAdmin(requester)) {
+      return res.status(403).json({ error: "פעולה זו שמורה למנהלים בלבד" });
+    }
+
+    if (!url || !collection) {
+      return res.status(400).json({ error: "URL and collection are required" });
+    }
+
+    try {
+      console.log(`[GitHub Import] Fetching data from: ${url} for collection: ${collection}`);
+      const response = await axios.get(url, { timeout: 10000 });
+      let data = response.data;
+
+      // Handle raw CSV content if needed (though JSON is preferred for GitHub "database")
+      if (typeof data === "string" && (url.endsWith(".csv") || data.includes(","))) {
+         // Basic CSV to JSON conversion or use library if needed
+         // For now, we expect JSON for the "GitHub Database" feature
+         return res.status(400).json({ error: "Currently only JSON format is supported for GitHub import." });
+      }
+
+      if (!Array.isArray(data)) {
+        // If it's a single object, wrap it
+        data = [data];
+      }
+
+      // Save to SQLite (reusing the POST logic)
+      const transaction = db.transaction((items) => {
+        // Clear if it's a full sync? Let's make it optional or default to merge
+        const insert = db.prepare(`REPLACE INTO ${collection} (id, data, updatedAt) VALUES (?, ?, CURRENT_TIMESTAMP)`);
+        for (const item of items) {
+          const id = item.id || item.ID || Math.random().toString(36).substr(2, 9);
+          const { id: _, ID: __, ...rest } = item;
+          insert.run(String(id), JSON.stringify(rest));
+        }
+      });
+
+      transaction(data);
+
+      res.json({ success: true, count: data.length });
+    } catch (error: any) {
+      console.error(`[GitHub Import] Error:`, error.message);
+      res.status(500).json({ error: `כשל בייבוא מגיטהב: ${error.message}` });
     }
   });
   // ------------------------------
@@ -433,7 +608,8 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
               item && (
                 item.GroupNameHe || item.GroupName || item.GroupTitle || 
                 item.GroupId || item.Id || item.Code || item.GroupCode ||
-                item.MatrimId || item.MatrimName || item.MatrimNameHe
+                item.MatrimId || item.MatrimName || item.MatrimNameHe ||
+                item.Cumule !== undefined || item.Goal !== undefined
               )
             );
             if (looksLikeGroups) return obj;
@@ -446,8 +622,8 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
           }
           if (!obj || typeof obj !== 'object') return null;
           
-          // If it looks like a single group object, wrap it in an array
-          if (obj.GroupName || obj.MatrimName || obj.MatrimID || obj.GroupId || obj.MatrimId || obj.GroupTitle || obj.GroupNameHe) {
+          // If it looks like a single group object (e.g. from SearchMatrim with a specific ID)
+          if (obj.GroupName || obj.MatrimName || obj.MatrimID || obj.GroupId || obj.MatrimId || obj.GroupTitle || obj.GroupNameHe || obj.Cumule !== undefined) {
             return [obj];
           }
           
@@ -456,7 +632,8 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
             'data', 'items', 'results', 'MatrimsList', 'GroupsList', 
             'Group', 'Matrim', 'GroupsData', 'MatrimsData', 'Table', 'Table1',
             'MatrimsDataList', 'GroupsDataList', 'List', 'list', 'Data',
-            'fundraisers', 'Fundraisers', 'MatrimTotalList', 'GroupsTotalList'
+            'fundraisers', 'Fundraisers', 'MatrimTotalList', 'GroupsTotalList',
+            'MatrimsList'
           ];
           for (const key of keys) {
             if (Array.isArray(obj[key])) return obj[key];
@@ -470,7 +647,7 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
             if (Array.isArray(obj[key])) {
               const arr = obj[key];
               if (arr.length > 0 && typeof arr[0] === 'object' && 
-                 (arr[0].GroupName || arr[0].MatrimName || arr[0].ID || arr[0].Cumule)) {
+                 (arr[0].GroupName || arr[0].MatrimName || arr[0].ID || arr[0].Cumule !== undefined)) {
                 return arr;
               }
             }
@@ -492,16 +669,16 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
         if (Array.isArray(rawGroups) && rawGroups.length > 0) {
           const normalized = rawGroups.map(g => {
             // הנתונים נלקחים בדיוק לפי המנגנון שהועלה: Cumule לסכום ו-Goal ליעד
-            const total = cleanNumber(g.Cumule !== undefined ? g.Cumule : (g.TotalAmount || g.Amount || g.Sum || 0));
-            const goal = cleanNumber(g.Goal !== undefined ? g.Goal : (g.Target || g.GoalAmount || g.TargetAmount || 0));
+            const total = cleanNumber(g.Cumule !== undefined ? g.Cumule : (g.TotalAmount || g.Amount || g.Sum || g.TotalSum || 0));
+            const goal = cleanNumber(g.Goal !== undefined ? g.Goal : (g.Target || g.GoalAmount || g.TargetAmount || g.GoalSum || 0));
             
             return {
               ...g,
-              GroupName: String(g.GroupName || g.MatrimName || g.Name || g.Title || "ללא שם").trim(),
+              GroupName: String(g.GroupName || g.MatrimName || g.GroupNameHe || g.MatrimNameHe || g.Name || g.Title || "ללא שם").trim(),
               TotalAmount: total,
               Goal: goal,
               Percentage: goal > 0 ? (total / goal) * 100 : 0,
-              ID: String(g.MatrimId || g.MatrimID || g.ID || g.GroupId || g.Code || "").trim()
+              ID: String(g.MatrimId || g.MatrimID || g.ID || g.Id || g.GroupId || g.Code || g.GroupCode || `auto_${g.GroupName || Math.random().toString(36).substr(2, 5)}`).trim()
             };
           });
           
@@ -550,78 +727,136 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
       };
 
       const getCombinedResult = async (mosadId: string, forceId?: string) => {
-        console.log(`[Server] Starting data fetch for mosad ${mosadId}${forceId ? ` (Targeting ID: ${forceId})` : ""}`);
+        console.log(`[Server] Starting meticulous data fetch with Campaign Totals sync...`);
         let allGroups: any[] = [];
+        let campaignStatus: any = null;
 
-        // 1. FAST PATH: Direct Bulk Endpoints first as they are most reliable and return everything in one go
-        const bulkEndpoints = [
-          `https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=GetGroups&MosadId=${mosadId}&Count=10000`,
-          `https://www.matara.pro/nedarimplus/online/GetGroups.aspx?mosad=${mosadId}&Count=10000`,
-          `https://www.matara.pro/nedarimplus/online/MatchPlus.aspx?Action=GetGroupsList&MosadId=${mosadId}&Count=10000`,
-          `https://www.matara.pro/nedarimplus/online/GetCampaignGroups.aspx?mosad=${mosadId}&Count=10000`,
-          `https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=GetMatrims&MosadId=${mosadId}&Count=10000`,
-          `https://www.matara.pro/nedarimplus/online/GetMatrims.aspx?mosad=${mosadId}&Count=10000`
-        ];
-        
-        console.log(`[Server] Trying fast path bulk endpoints...`);
-        const bulkResults = await Promise.all(bulkEndpoints.map(url => tryFetch(url)));
-        for (const res of bulkResults) {
-          const validated = groupsValidator(res);
-          if (validated && Array.isArray(validated) && validated.length > 0) {
-            allGroups = [...allGroups, ...validated];
-            console.log(`[Server] Fast path success! Found ${validated.length} groups.`);
+        // 0. Priority Discovery: If a forceId is provided, pull it first
+        if (forceId) {
+          console.log(`[Server] Force-discovery for ID: ${forceId}`);
+          try {
+            const res = await tryFetch(`https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=SearchMatrim&Name=${encodeURIComponent(forceId)}&MosadId=${mosadId}`);
+            const validated = groupsValidator(res);
+            if (validated) allGroups = [...allGroups, ...validated];
+          } catch (e) {
+            console.error(`[Server] Force-discovery failed for ${forceId}`, e);
           }
         }
 
-        // If we found a good amount of groups, we can stop here (or at least return early if it's very high)
-        if (allGroups.length > 50) {
-          console.log(`[Server] Found enough groups in fast path (${allGroups.length}). Skipping slow discovery.`);
-          return finalizeGroups(allGroups);
+        // 1. Fetch exact Campaign Total Status (The "Source of Truth" for the total sum)
+        try {
+          const statusRes = await tryFetch(`https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=GetCampaignStatus&MosadId=${mosadId}`);
+          if (statusRes && statusRes.length > 0) {
+            campaignStatus = statusRes[0];
+            console.log(`[Server] Campaign Status retrieved. Total: ${campaignStatus.TotalAmount}, Goal: ${campaignStatus.GoalAmount}`);
+          }
+        } catch (e) {
+          console.error("[Server] Failed to fetch campaign status", e);
         }
 
-        // 2. Priority: Force ID fetch
-        if (forceId) {
-          console.log(`[Server] Trying force ID discovery for ${forceId}...`);
-          const urls = [
-            `https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=SearchMatrim&Name=${forceId}&MosadId=${mosadId}`,
-            `https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=GetGroups&Name=${forceId}&MosadId=${mosadId}`,
-            `https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=GetMatrims&Name=${forceId}&MosadId=${mosadId}`
-          ];
-          const forceResults = await Promise.all(urls.map(url => tryFetch(url)));
-          for (const res of forceResults) {
-            const validated = groupsValidator(res);
-            if (validated && Array.isArray(validated)) {
-              allGroups = [...allGroups, ...validated];
+        // 2. Exact Search Discovery: Fetch stats for ALL fundraisers currently in the local database
+        // This mirrors the user's provided logic of iterating through known IDs
+        try {
+          const knownFundraisers = db.prepare("SELECT id FROM fundraisers").all() as { id: string }[];
+          if (knownFundraisers.length > 0) {
+            console.log(`[Server] Updating ${knownFundraisers.length} known fundraisers using SearchMatrim...`);
+            
+            // Chunking for network stability, similar to user's suggested pattern
+            const searchChunkSize = 25; 
+            for (let i = 0; i < knownFundraisers.length; i += searchChunkSize) {
+              const chunk = knownFundraisers.slice(i, i + searchChunkSize);
+              const searchPromises = chunk.map(f => {
+                const idStr = String(f.id).trim();
+                const cleanId = encodeURIComponent(idStr);
+                return tryFetch(`https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=SearchMatrim&Name=${cleanId}&MosadId=${mosadId}`);
+              });
+
+              const results = await Promise.all(searchPromises);
+              results.forEach((res, index) => {
+                const targetId = String(chunk[index].id).trim();
+                const validated = groupsValidator(res);
+                if (validated && validated.length > 0) {
+                  // User's logic: if multiple results, the first one is usually the most relevant
+                  // We try to find an exact match first, else take the first one
+                  const exactMatch = validated.find(g => String(g.ID).trim() === targetId || String(g.GroupName).trim() === targetId);
+                  const bestMatch = exactMatch || validated[0];
+                  if (bestMatch) allGroups.push(bestMatch);
+                }
+              });
+              
+              if (i + searchChunkSize < knownFundraisers.length) await sleep(500);
             }
           }
+        } catch (e) {
+          console.error("[Server] Critical failure in SearchMatrim update loop", e);
         }
-        
-        // 3. Fallback discovery (Only if we still have very few groups)
-        if (allGroups.length < 5) {
-          console.log(`[Server] Too few groups found. Starting discovery phase...`);
-          const searchChars = ["", "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט", "י", "כ", "ל", "מ", "נ", "ס", "ע", "פ", "צ", "ק", "ר", "ש", "ת"];
-          const chunks = [];
-          for (let i = 0; i < searchChars.length; i += 8) chunks.push(searchChars.slice(i, i + 8));
 
-          for (const chunk of chunks) {
-            await Promise.all(chunk.map(async (char) => {
-              const actions = ['GetGroups', 'SearchMatrim'];
-              for (const action of actions) {
-                const url = `https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=${action}&Name=${encodeURIComponent(char)}&MosadId=${mosadId}&From=0&Count=200`;
-                const res = await tryFetch(url);
-                const validated = groupsValidator(res);
-                if (validated && Array.isArray(validated)) {
-                  allGroups = [...allGroups, ...validated];
-                }
-              }
-            }));
-            // If we found significant data, stop discovery to save time
-            if (allGroups.length > 200) break;
-            await sleep(50);
+        // 3. Discovery Fallback: Search for NEW fundraisers not yet in our DB
+        try {
+          // A: Bulk URLs
+          const bulkUrls = [
+            `https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=GetGroups&MosadId=${mosadId}&Count=10000`,
+            `https://www.matara.pro/nedarimplus/online/MatchPlus.aspx?Action=GetGroupsList&MosadId=${mosadId}&Count=10000`
+          ];
+          
+          const bulkResults = await Promise.all(bulkUrls.map(url => tryFetch(url).catch(() => null)));
+          for (const res of bulkResults) {
+            const validated = groupsValidator(res);
+            if (validated) allGroups = [...allGroups, ...validated];
           }
+
+          // B: Targeted Search Fallback (Alphabetic)
+          // Includes Hebrew characters to catch anything missed by bulk URLs
+          const searchChars = ["", "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט", "י", "כ", "ל", "מ", "נ", "ס", "ע", "פ", "צ", "ק", "ר", "ש", "ת"];
+          const charChunkSize = 10;
+          for (let i = 0; i < searchChars.length; i += charChunkSize) {
+            const chunk = searchChars.slice(i, i + charChunkSize);
+            const searchPromises = chunk.map(char => 
+              tryFetch(`https://www.matara.pro/nedarimplus/V6/MatchPlus.aspx?Action=SearchMatrim&Name=${encodeURIComponent(char)}&MosadId=${mosadId}`)
+            );
+            const results = await Promise.all(searchPromises);
+            for (const res of results) {
+              const validated = groupsValidator(res);
+              if (validated) allGroups = [...allGroups, ...validated];
+            }
+            if (i + charChunkSize < searchChars.length) await sleep(300);
+          }
+        } catch (e) {
+          console.error("[Server] Fallback discovery failed", e);
         }
 
-        return finalizeGroups(allGroups);
+        const finalizedGroups = finalizeGroups(allGroups);
+        
+        // 4. Verification & Adjustment: Compare sum of groups to total campaign amount
+        if (campaignStatus) {
+           const sumOfGroups = finalizedGroups.reduce((sum, g) => sum + (g.TotalAmount || 0), 0);
+           const diff = campaignStatus.TotalAmount - sumOfGroups;
+           
+           // If there is a meaningful difference (unassigned donations), add a "General" group
+           if (diff > 1) {
+             console.log(`[Server] Syncing diff: ${diff} found as unassigned donations.`);
+             finalizedGroups.push({
+               ID: "general_donations",
+               GroupName: "תרומות כלליות / אופליין",
+               TotalAmount: diff,
+               Goal: 0, // General donations usually don't have a separate goal
+               Percentage: 100,
+               IsGeneral: true
+             });
+           }
+           
+           // Ensure the result object also carries the absolute campaign metrics
+           return {
+             groups: finalizedGroups,
+             campaign: {
+               TotalAmount: campaignStatus.TotalAmount,
+               Goal: campaignStatus.GoalAmount,
+               Title: campaignStatus.Title || campaignStatus.CampaignName
+             }
+           };
+        }
+
+        return { groups: finalizedGroups, success: true };
       };
 
       const finalizeGroups = (groups: any[]) => {
@@ -629,12 +864,18 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
         const uniqueMap = new Map();
         groups.forEach((g) => {
           if (!g || typeof g !== 'object') return;
-          const id = String(g.ID || g.Id || g.MatrimId || g.GroupId || g.Code || "").trim();
+          const id = String(g.ID || g.Id || g.MatrimId || g.GroupId || g.Code || g.GroupCode || "").trim();
           const name = String(g.GroupName || g.Name || g.MatrimName || g.Title || "ללא שם").trim();
           const goal = Number(g.Goal || g.Target || g.GoalAmount || g.TargetAmount || 0);
           const cumule = Number(g.TotalAmount || g.Cumule || g.Amount || g.Sum || g.Total || 0);
+          
           if (name === "ללא שם" && !id) return;
-          const key = (id && id !== "0" && id !== "undefined") ? `ID:${id}` : `NAME:${name}:${goal}`;
+          
+          // Use multiple identifiers to avoid over-deduplication
+          const key = (id && id !== "0" && id !== "undefined") 
+            ? `ID:${id}` 
+            : `NAME:${name}_GOAL:${goal}`;
+            
           const existing = uniqueMap.get(key);
           if (!existing || cumule > Number(existing.TotalAmount)) {
             uniqueMap.set(key, { ...g, GroupName: name, ID: id, Goal: goal, TotalAmount: cumule });
@@ -644,7 +885,7 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
       };
 
       // Fetch campaign data and groups
-      const campaignData = await getBestResult([
+      let campaignData = await getBestResult([
         tryFetch(`https://www.matara.pro/nedarimplus/online/GetCampaignData.aspx?mosad=${mosad}`),
         tryFetch(`https://nedarim.org.il/nedarimplus/online/GetCampaignData.aspx?mosad=${mosad}`),
         tryFetch(`https://www.matara.pro/nedarimplus/online/GetCampaignData.aspx?mosad=${mosad}&all=1`),
@@ -665,7 +906,9 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
         })
       ], campaignValidator);
 
-      let groupsData = await getCombinedResult(mosad, forceId as string);
+      let combinedResult = await getCombinedResult(mosad, forceId as string);
+      let groupsData = combinedResult.groups || [];
+      const combinedCampaign = combinedResult.campaign;
 
       // Fallback: If groupsData is missing or smaller than groups in campaignData, use campaignData's groups
       const campaignGroups = campaignData?.groups || campaignData?.Groups || campaignData?.CampaignGroups || campaignData?.data?.groups;
@@ -674,7 +917,18 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
         groupsData = campaignGroups;
       }
 
-      if (!campaignData && (!groupsData || (Array.isArray(groupsData) && groupsData.length === 0))) {
+      // Sync campaign metadata: Prefer data from getCombinedResult if it was calculated from CampaignStatus
+      if (combinedCampaign) {
+        if (!campaignData) campaignData = {};
+        campaignData.TotalAmount = combinedCampaign.TotalAmount;
+        campaignData.Goal = combinedCampaign.Goal;
+        campaignData.CampaignName = combinedCampaign.Title || campaignData.CampaignName;
+        if (campaignData.Goal > 0) {
+          campaignData.Percentage = (campaignData.TotalAmount / campaignData.Goal) * 100;
+        }
+      }
+
+      if (!campaignData && (Array.isArray(groupsData) && groupsData.length === 0)) {
         console.warn(`[Server] No data found for mosad ${mosad} after all attempts.`);
         return res.status(404).json({ 
           success: false, 
@@ -686,7 +940,7 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
       console.log(`[Server] Returning data for mosad ${mosad}: ${Array.isArray(groupsData) ? groupsData.length : 0} groups found.`);
       
       // Calculate total from groups as a fallback if it's higher than the campaign reported total
-      const calculatedTotal = (groupsData || []).reduce((acc: number, g: any) => acc + (cleanNumber(g.TotalAmount) || 0), 0);
+      const calculatedTotal = (Array.isArray(groupsData) ? groupsData : []).reduce((acc: number, g: any) => acc + (cleanNumber(g.TotalAmount) || 0), 0);
       if (campaignData && calculatedTotal > (campaignData.TotalAmount || 0)) {
         console.log(`[Server] Calculated total from groups (${calculatedTotal}) is higher than campaign total (${campaignData.TotalAmount}). Using calculated total.`);
         campaignData.TotalAmount = calculatedTotal;
