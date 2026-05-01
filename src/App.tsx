@@ -1028,7 +1028,7 @@ const App: React.FC = () => {
 
 const AppWrapper: React.FC = () => (
   <ErrorBoundary>
-    <Router>
+    <Router basename={import.meta.env.BASE_URL}>
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/admin" element={<Admin />} />
