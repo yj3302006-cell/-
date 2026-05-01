@@ -15,6 +15,10 @@ export interface GroupData {
   Goal: number;
   Percentage?: number;
   IsGeneral?: boolean;
+  GroupId?: string;
+  Code?: string;
+  GroupCode?: string;
+  Amount?: number;
 }
 
 export interface RewardData {
