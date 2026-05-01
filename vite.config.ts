@@ -8,6 +8,16 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     base: './',
+    build: {
+      outDir: 'dist',
+      rollupOptions: {
+        output: {
+          entryFileNames: `assets/[name].js`,
+          chunkFileNames: `assets/[name].js`,
+          assetFileNames: `assets/[name].[ext]`
+        }
+      }
+    },
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
